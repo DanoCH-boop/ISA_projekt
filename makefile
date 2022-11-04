@@ -1,5 +1,5 @@
 CC=g++
-CFLAGS=-std=c++11 -Wall
+CFLAGS=-std=c++17 -Wall
 
 all:
 	$(CC) $(CFLAGS) isa_netgen.cpp -lpcap -o isa_netgen
