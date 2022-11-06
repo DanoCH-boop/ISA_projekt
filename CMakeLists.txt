@@ -3,4 +3,4 @@ project(ISA_projekt)
 
 set(CMAKE_CXX_STANDARD 17)
 
-add_executable(ISA_projekt isa_netgen.cpp isa_netgen.h)
+add_executable(ISA_projekt isa_netgen.cpp udp_export.cpp isa_netgen.h)

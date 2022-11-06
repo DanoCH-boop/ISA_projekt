@@ -3,6 +3,7 @@
 // autor: Daniel Chudý, xchudy06, VUT FIT Brno
 // 20.10.2022
 
+#include <vector>
 #include "isa_netgen.h"
 
 char errbuff[PCAP_ERRBUF_SIZE];	// Error string
@@ -12,16 +13,18 @@ NETFLOW_HEADER Nf_header;
 NETFLOW_FLOW Nf_flow;
 Args args;
 uint32_t SysStarttime;
+uint32_t unix_usec;
+uint32_t unix_sec;
+uint32_t currTime;
 std::map<mytuple_t, NETFLOW_FLOW> flow_map;
-unsigned int ipv4_hl;
+uint32_t ipv4_len;
 uint8_t tcp_flags;
-
 
 /**
  * @brief gets the timestamp in ms
  *
  * @param ts Structure cotaining sec and usec in unixtime
- * @return void
+ * @return uint32_t
 */
 uint32_t get_ts(timeval ts) {
     return ts.tv_sec*1000 + ts.tv_usec/1000;
@@ -37,7 +40,7 @@ uint32_t get_ts(timeval ts) {
 pair<uint16_t,uint16_t> tpc_fun(const u_char *packet, unsigned int ip_hl) {
     auto _tcp = (tcphdr*)(packet + SIZE_ETHERNET + ip_hl);
 
-    tcp_flags= _tcp->th_flags;
+    tcp_flags = _tcp->th_flags;
     uint16_t srcport = ntohs(_tcp->th_sport);
     uint16_t dstport = ntohs(_tcp->th_dport);
     return make_pair(srcport,dstport);
@@ -71,8 +74,8 @@ uint16_t icmp_fun(const u_char *packet, unsigned int ip_hl) {
     uint8_t code = _icmp->code;
     uint8_t type = _icmp->type;
 
-    uint16_t dstport = type * 256 + code; //discord
-    return dstport;
+    //uint16_t dstport = type * 256 + code; //discord
+    return 0;
 }
 
 /**
@@ -84,7 +87,9 @@ uint16_t icmp_fun(const u_char *packet, unsigned int ip_hl) {
 */
 mytuple_t ipv4_fun(const u_char *packet) {
     auto ipv4 = (iphdr *)(packet + SIZE_ETHERNET);
-    ipv4_hl = ipv4->ihl * (unsigned)4;
+    auto my_ip = (ip *)(packet + SIZE_ETHERNET);
+    auto ipv4_hl = ipv4->ihl * (unsigned)4;
+    ipv4_len = ntohs(ipv4->tot_len);
 
     Nf_flow.srcaddr = ipv4->saddr;
     Nf_flow.dstaddr = ipv4->daddr;
@@ -111,18 +116,25 @@ mytuple_t ipv4_fun(const u_char *packet) {
     Nf_flow.srcport = ports.first;
     Nf_flow.dstport = ports.second;
 
-    return forward_as_tuple(Nf_flow.srcaddr, Nf_flow.dstaddr, Nf_flow.srcport,  Nf_flow.dstport,  Nf_flow.prot);
+    return make_tuple(Nf_flow.srcaddr, Nf_flow.dstaddr, Nf_flow.srcport,  Nf_flow.dstport,  Nf_flow.prot);
 }
 
-bool time_control(uint32_t curr, uint32_t first, uint32_t last) {
-
-    if(curr - first > args.active_timer*1000){
+bool time_control(uint32_t currSysUpTime, uint32_t first, uint32_t last) {
+    if(currSysUpTime - first > args.active_timer*1000){
         return true;
     }
-    if(curr - last > args.inactive_timer*1000){
+    if(currSysUpTime - last > args.inactive_timer*1000){
         return true;
     }
     return false;
+}
+
+void make_header() {
+    Nf_header.SysUptime = htonl(currTime - SysStarttime);
+    Nf_header.count = htons(1);
+    Nf_header.flow_sequnce++;
+    Nf_header.unix_secs = htonl(unix_sec);
+    Nf_header.unix_nsecs = htonl(unix_usec*1000);
 }
 
 /**
@@ -136,11 +148,14 @@ void returned_packet(u_char *fargs, const struct pcap_pkthdr *header, const u_ch
 {
     static int n = 0;
     mytuple_t five_tuple;
+    printf("%d\n", n);
     //print timtestamp in RFC3339
     if(n == 0){
         SysStarttime = get_ts(header->ts);
     }
-    auto currTime = get_ts(header->ts);
+    currTime = get_ts(header->ts);
+    unix_usec = header->ts.tv_usec;
+    unix_sec = header->ts.tv_sec;
     // define ethernet header
     auto ethernet = (ether_header*)(packet);
 
@@ -156,48 +171,74 @@ void returned_packet(u_char *fargs, const struct pcap_pkthdr *header, const u_ch
             exit(1);
     }
 
-
-    if(int(flow_map.size()) > args.count){
-        //exportuj posledny flowik - treba podla last, ktory ma najneskorsi cas?
-    }
-
     //https://stackoverflow.com/a/26282004/20241032
-    for (auto const& flow : flow_map)
+    map<mytuple_t, NETFLOW_FLOW>::iterator it;
+    for (it = flow_map.begin(); it != flow_map.end();)
     {
-        if(time_control(currTime, flow.second.First,flow.second.Last)){
-            //exportuj do pixi
-            return;
+        if(time_control(currTime - SysStarttime, it->second.First,it->second.Last)){
+            make_header();
+            udp_export(it->second, Nf_header);
+            it = flow_map.erase(it);
+        }
+        else{
+            it++;
         }
     }
 
-    if(flow_map.count(five_tuple) == 1){    //flow is alredy in the map
-        flow_map[five_tuple].dPkts ++;
-        flow_map[five_tuple].dOctets += ipv4_hl;
-        flow_map[five_tuple].tcp_flags |= tcp_flags;
-        flow_map[five_tuple].Last = currTime - SysStarttime;
-    }
-    else{                                       //new flow
+    if(flow_map.find(five_tuple) == flow_map.end()){    //new flow
         Nf_flow.dPkts = 1;
-        Nf_flow.dOctets = ipv4_hl;
+        Nf_flow.dOctets = ipv4_len;
         Nf_flow.tcp_flags = tcp_flags;
         Nf_flow.First = currTime - SysStarttime;
         Nf_flow.Last = Nf_flow.First;
-        flow_map[five_tuple] = Nf_flow;
+        flow_map.insert({five_tuple, Nf_flow});
+    }
+    else{                                               //flow is alredy in the map
+        flow_map[five_tuple].dPkts++;
+        flow_map[five_tuple].dOctets += ipv4_len;
+        flow_map[five_tuple].tcp_flags |= tcp_flags;
+        flow_map[five_tuple].Last = currTime - SysStarttime;
     }
 
+    vector<uint32_t> first_times;
+    if(int(flow_map.size()) > args.count){
+        //exportuj najstarsi flowik - napr. podla first, ktory ma najneskorsi cas
+        for (auto const& flow : flow_map)
+        {
+            first_times.push_back(flow.second.First);
+        }
+        uint32_t to_export = *min_element(first_times.begin(), first_times.end());
+        for (auto const& flow : flow_map)
+        {
+            if(flow.second.First == to_export){
+                make_header();
+                udp_export(flow.second,Nf_header);
+                flow_map.erase(flow.first);
+                break;
+            }
+        }
+    }
+
+    if (tcp_flags == TH_FIN || tcp_flags == TH_RST){
+        make_header();
+        udp_export(flow_map[five_tuple],Nf_header);
+        flow_map.erase(five_tuple);
+    }
+
+
     n++; //count of total packets
-    int i = 0;
 
     char saddr[INET_ADDRSTRLEN];
-    char daddr[INET_ADDRSTRLEN];
-
-    //inet_ntop(AF_INET,&(ipv4->daddr),daddr,INET_ADDRSTRLEN);
-
+//    char daddr[INET_ADDRSTRLEN];
+//
+//    inet_ntop(AF_INET,&(ipv4->daddr),daddr,INET_ADDRSTRLEN);
     for (auto const& flow : flow_map)
     {
-        //printf("%d", i++);
+//        if(flow.first == five_tuple){
+//            printf("jebe i\n");
+//        }
         inet_ntop(AF_INET,&(flow.second.srcaddr),saddr,INET_ADDRSTRLEN);
-        printf("%s", saddr);
+        printf("%s\n", saddr);
     }
 }
 
@@ -212,7 +253,6 @@ void parse_args(int argc, char **argv) {
                 args.filename = optarg;
                 break;
             case 'c' :
-
                 args.netflow_collector = strtok(optarg, ":");
                 if((args.port = strtok(nullptr, ":")) == nullptr){
                     args.port = "2055";
@@ -240,14 +280,6 @@ void parse_args(int argc, char **argv) {
                 break;
         }
     }
-}
-
-const char *find_interface() {
-    pcap_if_t *interface_list;
-    pcap_findalldevs(&interface_list,errbuff);
-    auto interface = interface_list->name;
-    pcap_freealldevs(interface_list);
-    return interface;
 }
 
 int main(int argc, char **argv)
@@ -285,6 +317,15 @@ int main(int argc, char **argv)
     // get packets, 0 == infinite looping
     pcap_loop(handle, -1, returned_packet, nullptr);
 
+    map<mytuple_t, NETFLOW_FLOW>::iterator it;
+    for (it = flow_map.begin(); it != flow_map.end();)
+    {
+        make_header();
+        udp_export(it->second, Nf_header);
+        it = flow_map.erase(it);
+    }
+
+    flow_map.clear();
     // clean and close
     pcap_freecode(&fp);
 	pcap_close(handle);
