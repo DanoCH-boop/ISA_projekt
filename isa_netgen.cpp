@@ -3,12 +3,12 @@
 // autor: Daniel Chudý, xchudy06, VUT FIT Brno
 // 20.10.2022
 
-#include <vector>
 #include "isa_netgen.h"
 
 char errbuff[PCAP_ERRBUF_SIZE];	// Error string
 using namespace std;
 
+// Global variables
 NETFLOW_HEADER Nf_header;
 NETFLOW_FLOW Nf_flow;
 Args args;
@@ -16,7 +16,7 @@ uint32_t SysStarttime;
 uint32_t unix_usec;
 uint32_t unix_sec;
 uint32_t currTime;
-std::map<mytuple_t, NETFLOW_FLOW> flow_map;
+std::map<mytuple_t, NETFLOW_FLOW> flow_map; //flow cache
 uint32_t ipv4_len;
 uint8_t tcp_flags;
 
@@ -31,7 +31,7 @@ uint32_t get_ts(timeval ts) {
 }
 
 /**
- * @brief prints ports of a tcp packet
+ * @brief gets ports and flags of a tcp packet
  *
  * @param packet pointer to the packet data
  * @param ip_hl length of the IP header
@@ -39,7 +39,6 @@ uint32_t get_ts(timeval ts) {
 */
 pair<uint16_t,uint16_t> tpc_fun(const u_char *packet, unsigned int ip_hl) {
     auto _tcp = (tcphdr*)(packet + SIZE_ETHERNET + ip_hl);
-
     tcp_flags = _tcp->th_flags;
     uint16_t srcport = ntohs(_tcp->th_sport);
     uint16_t dstport = ntohs(_tcp->th_dport);
@@ -47,7 +46,7 @@ pair<uint16_t,uint16_t> tpc_fun(const u_char *packet, unsigned int ip_hl) {
 }
 
 /**
- * @brief prints ports of a udp packet
+ * @brief gets ports of a udp packet
  *
  * @param packet pointer to the packet data
  * @param ip_hl length of the IP header
@@ -62,34 +61,35 @@ pair<uint16_t,uint16_t> udp_fun(const u_char *packet, unsigned int ip_hl) {
 }
 
 /**
- * @brief helper function for printing icmp packet data
+ * @brief helper function for getting icmp packet data
  *
  * @param packet pointer to the packet data
  * @param ip_hl length of the IP header
  * @return uint16_t
 */
 uint16_t icmp_fun(const u_char *packet, unsigned int ip_hl) {
-    auto _icmp = (icmphdr*)(packet + SIZE_ETHERNET + ip_hl);
+    //auto _icmp = (icmphdr*)(packet + SIZE_ETHERNET + ip_hl);
 
-    uint8_t code = _icmp->code;
-    uint8_t type = _icmp->type;
+    //uint8_t code = _icmp->code;
+    //uint8_t type = _icmp->type;
 
-    //uint16_t dstport = type * 256 + code; //discord
+    //uint16_t dstport = type * 256 + code; //computing the port
     return 0;
 }
 
 /**
- * @brief prints ipv4 adresses, determines the transport layer protocol
- *
+ * @brief get ipv4 adresses, tos, determines the transport layer protocol
+ * creates tuple - key for the map of flows
  * @param packet pointer to the packet data
- * @note https://stackoverflow.com/a/5328184, Milan
  * @return std::tuple<uint32_t, uint32_t, uint16_t, uint16_t,uint8_t>
 */
 mytuple_t ipv4_fun(const u_char *packet) {
     auto ipv4 = (iphdr *)(packet + SIZE_ETHERNET);
+    //alternative ip header for len, the tot_len member
+    //from iphdr structure does not give the same byte length
     auto my_ip = (ip *)(packet + SIZE_ETHERNET);
     auto ipv4_hl = ipv4->ihl * (unsigned)4;
-    ipv4_len = ntohs(ipv4->tot_len);
+    ipv4_len = ntohs(my_ip->ip_len);
 
     Nf_flow.srcaddr = ipv4->saddr;
     Nf_flow.dstaddr = ipv4->daddr;
@@ -103,9 +103,11 @@ mytuple_t ipv4_fun(const u_char *packet) {
             ports = tpc_fun(packet, ipv4_hl);
             break;
         case IPPROTO_UDP:
+            tcp_flags = 0;
             ports = udp_fun(packet, ipv4_hl);
             break;
         case IPPROTO_ICMP:
+            tcp_flags = 0;
             ports = make_pair(icmp_fun(packet, ipv4_hl),0);
             break;
         default:
@@ -119,6 +121,14 @@ mytuple_t ipv4_fun(const u_char *packet) {
     return make_tuple(Nf_flow.srcaddr, Nf_flow.dstaddr, Nf_flow.srcport,  Nf_flow.dstport,  Nf_flow.prot);
 }
 
+/**
+ * @brief checks the active/inactive timers, if the flow should be exported
+ *
+ * @param currSysUpTime currentime time in milisecond since the start of the program
+ * @param first time in milisecond since the start of the program of the first packet in the flow
+ * @param last time in milisecond since the start of the program of the last packet in the flow
+ * @return bool
+*/
 bool time_control(uint32_t currSysUpTime, uint32_t first, uint32_t last) {
     if(currSysUpTime - first > args.active_timer*1000){
         return true;
@@ -129,6 +139,11 @@ bool time_control(uint32_t currSysUpTime, uint32_t first, uint32_t last) {
     return false;
 }
 
+/**
+ * @brief prepares the header structure for the export
+ *
+ * @return void
+*/
 void make_header() {
     Nf_header.SysUptime = htonl(currTime - SysStarttime);
     Nf_header.count = htons(1);
@@ -138,7 +153,8 @@ void make_header() {
 }
 
 /**
- * @brief callback function, prints MAC adresses, determines the network layer protocol
+ * @brief callback function, determines the network layer protocol, exports flows
+ * that need to be exported, creates/updates flows using map of flows
  *
  * @param packet pointer to the packet data
  * @param header pcap packet header
@@ -147,15 +163,19 @@ void make_header() {
 void returned_packet(u_char *fargs, const struct pcap_pkthdr *header, const u_char *packet)
 {
     static int n = 0;
+
+    //key
     mytuple_t five_tuple;
-    printf("%d\n", n);
-    //print timtestamp in RFC3339
+
+    //time of the first packet
     if(n == 0){
         SysStarttime = get_ts(header->ts);
     }
+    //time of the current packet
     currTime = get_ts(header->ts);
     unix_usec = header->ts.tv_usec;
     unix_sec = header->ts.tv_sec;
+
     // define ethernet header
     auto ethernet = (ether_header*)(packet);
 
@@ -171,11 +191,33 @@ void returned_packet(u_char *fargs, const struct pcap_pkthdr *header, const u_ch
             exit(1);
     }
 
+    //export the oldest flow if the flow cache size exceeds given count (default 1024)
+    vector<uint32_t> first_times;
+    if(int(flow_map.size()) == args.count){
+        printf("size\n");
+        for (auto const& flow : flow_map)
+        {
+            first_times.push_back(flow.second.First);
+        }
+        uint32_t to_export = *min_element(first_times.begin(), first_times.end());
+        for (auto const& flow : flow_map)
+        {
+            if(flow.second.First == to_export){
+                make_header();
+                udp_export(flow.second,Nf_header);
+                flow_map.erase(flow.first);
+                break;
+            }
+        }
+    }
+
     //https://stackoverflow.com/a/26282004/20241032
+    //export a flow if its (in)active timer ran out
     map<mytuple_t, NETFLOW_FLOW>::iterator it;
     for (it = flow_map.begin(); it != flow_map.end();)
     {
         if(time_control(currTime - SysStarttime, it->second.First,it->second.Last)){
+            printf("time\n");
             make_header();
             udp_export(it->second, Nf_header);
             it = flow_map.erase(it);
@@ -193,55 +235,31 @@ void returned_packet(u_char *fargs, const struct pcap_pkthdr *header, const u_ch
         Nf_flow.Last = Nf_flow.First;
         flow_map.insert({five_tuple, Nf_flow});
     }
-    else{                                               //flow is alredy in the map
+    else{                                                       //flow is alredy in the map
         flow_map[five_tuple].dPkts++;
         flow_map[five_tuple].dOctets += ipv4_len;
         flow_map[five_tuple].tcp_flags |= tcp_flags;
         flow_map[five_tuple].Last = currTime - SysStarttime;
     }
 
-    vector<uint32_t> first_times;
-    if(int(flow_map.size()) > args.count){
-        //exportuj najstarsi flowik - napr. podla first, ktory ma najneskorsi cas
-        for (auto const& flow : flow_map)
-        {
-            first_times.push_back(flow.second.First);
-        }
-        uint32_t to_export = *min_element(first_times.begin(), first_times.end());
-        for (auto const& flow : flow_map)
-        {
-            if(flow.second.First == to_export){
-                make_header();
-                udp_export(flow.second,Nf_header);
-                flow_map.erase(flow.first);
-                break;
-            }
-        }
-    }
-
-    if (tcp_flags == TH_FIN || tcp_flags == TH_RST){
+    //export a flow if a FIN/RST flag appeared
+    if ((tcp_flags & TH_FIN) || (tcp_flags & TH_RST)){
+        printf("flag %d\n", tcp_flags);
         make_header();
         udp_export(flow_map[five_tuple],Nf_header);
         flow_map.erase(five_tuple);
     }
 
-
     n++; //count of total packets
-
-    char saddr[INET_ADDRSTRLEN];
-//    char daddr[INET_ADDRSTRLEN];
-//
-//    inet_ntop(AF_INET,&(ipv4->daddr),daddr,INET_ADDRSTRLEN);
-    for (auto const& flow : flow_map)
-    {
-//        if(flow.first == five_tuple){
-//            printf("jebe i\n");
-//        }
-        inet_ntop(AF_INET,&(flow.second.srcaddr),saddr,INET_ADDRSTRLEN);
-        printf("%s\n", saddr);
-    }
 }
 
+/**
+ * @brief parser program arguments
+ *
+ * @param argc currentime time in milisecond since the start of the program
+ * @param argv time in milisecond since the start of the program of the first packet in the flow
+ * @return void
+*/
 void parse_args(int argc, char **argv) {
 
     in_addr *host;
@@ -289,7 +307,7 @@ int main(int argc, char **argv)
 
     pcap_t *handle;			        // Session handle
 	struct bpf_program fp{};		// Our netmask
-    bpf_u_int32 mask = 0;		    // Our netmask
+    //bpf_u_int32 mask = 0;		    // Our netmask
     bpf_u_int32 net = 0;		    // Our IP
 
     handle = pcap_open_offline(args.filename, errbuff);
@@ -314,12 +332,14 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    // get packets, 0 == infinite looping
+    // get packets, -1 == infinite looping
     pcap_loop(handle, -1, returned_packet, nullptr);
 
+    //exports leftover packets
     map<mytuple_t, NETFLOW_FLOW>::iterator it;
     for (it = flow_map.begin(); it != flow_map.end();)
     {
+        printf("late\n");
         make_header();
         udp_export(it->second, Nf_header);
         it = flow_map.erase(it);

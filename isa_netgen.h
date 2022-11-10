@@ -7,6 +7,11 @@
 #define ISA_PROJEKT_ISA_NETGEN_H
 
 #define __FAVOR_BSD
+
+#include <cstdlib>
+#include <unistd.h>
+#include <netdb.h>
+#include <err.h>
 #include <pcap.h>
 #include <cstdio>
 #include <string>
@@ -15,10 +20,11 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <getopt.h>
-#include <tuple> // for tuple
+#include <tuple>
 #include <iostream>
-#include <map> // for map
+#include <map>
 #include <algorithm>
+#include <vector>
 
 #include <net/ethernet.h>
 #include <netinet/if_ether.h>
@@ -34,7 +40,6 @@
 #define SIZE_ETHERNET 14
 #define IPV4_T 2048
 #define IPV6_T 34525
-
 
 struct NETFLOW_HEADER{
   uint16_t version = htons(5), count;
