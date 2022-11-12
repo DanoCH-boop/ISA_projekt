@@ -1,6 +1,6 @@
 // nazov: isa_netgen.h
-// popis: Generování NetFlow dat ze zachycené síťové komunikace
-// autor: Daniel Chudý, xchudy06, VUT FIT Brno
+// popis: GenerovÃ¡nÃ­ NetFlow dat ze zachycenÃ© sÃ­Å¥ovÃ© komunikace
+// autor: Daniel ChudÃ½, xchudy06, VUT FIT Brno
 // 21.10.2022
 
 #ifndef ISA_PROJEKT_ISA_NETGEN_H
@@ -31,7 +31,9 @@
 #include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/ip6.h>
+#define __FAVOR_BSD
 #include <netinet/tcp.h>
+#define __FAVOR_BSD
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 #include <net/if_arp.h>

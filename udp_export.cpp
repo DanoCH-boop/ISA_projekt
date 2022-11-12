@@ -1,4 +1,4 @@
-//    Original owner/creator of this file: Petr Matoušek, VUT FIT BRNO, ISA course
+// Original owner/creator of this file: Petr Matoušek, VUT FIT BRNO, ISA course
 //
 //    Simple echo connected UDP client with two parameters and the connect() function
 //
@@ -8,14 +8,10 @@
 //
 //    Last update: Sept 2019
 
-//    Remix by: Daniel Chudý, xchudy06, VUT FIT BRNO, ISA course
-//    Date: 07.11.2022
+// Remix by: Daniel Chudý, xchudy06, VUT FIT BRNO, ISA course
+// Date: 07.11.2022
 
 #include "isa_netgen.h"
-
-
-
-#define BUFFER 1024    // buffer length
 
 /**
  * @brief prepares the netflow structure (header and flow)

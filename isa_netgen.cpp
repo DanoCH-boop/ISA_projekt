@@ -46,7 +46,7 @@ pair<uint16_t,uint16_t> tpc_fun(const u_char *packet, unsigned int ip_hl) {
 }
 
 /**
- * @brief gets ports of a udp packet
+ * @brief gets ports of udp packet
  *
  * @param packet pointer to the packet data
  * @param ip_hl length of the IP header
@@ -108,7 +108,7 @@ mytuple_t ipv4_fun(const u_char *packet) {
             break;
         case IPPROTO_ICMP:
             tcp_flags = 0;
-            ports = make_pair(icmp_fun(packet, ipv4_hl),0);
+            ports = make_pair(0, icmp_fun(packet, ipv4_hl));
             break;
         default:
             fprintf(stderr,"Unrecognized protocol\n");

@@ -1,0 +1,29 @@
+.TH CORRUPT 1
+.SH NAME
+flow \- NetFlow exporter, creates NetFlow records from the captured pcap data and sends them to the collector
+.SH SYNOPSIS
+.B flow
+[\fB\-f\fR \fI<file>\fR]
+[\fB\-c\fR \fI<netflow_collector>\fR[\fI:<port>\fR]\fR]
+[\fB\-a\fR \fI<active_timer>\fR]
+[\fB\-i\fR \fI<inactive_timer>\fR]
+[\fB\-m\fR \fI<count>\fR]
+.SH DESCRIPTION
+.B flow
+NetFlow exporter processes offline pcap data from a given pcap file or STDIN and creates v5 NetFlow records and exports them via UDP packet to the collector 
+.SH OPTIONS
+.TP
+.BR \-f =\fIfile.pcap\fR
+Name of analyzed file or STDIN.
+.TP
+.BR \-c =\fIneflow_collector:port\fR
+IP address or hostname of the NetFlow collector. optionally also UDP port (127.0.0.1:2055, if not specified).
+.TP
+.BR \-a =\fIactive_timer\fR
+Interval in seconds after which active records are exported to the collector (60 if not specified).
+.TP
+.BR \-i =\fIseconds\fR
+Interval in seconds after which inactive records are exported to the collector (10 if not specified).
+.TP
+.BR \-m =\fIcount\fR
+Flow-cache size. When the maximum size is reached, the oldest entry in the cache is exported to the collector (1024, if not specified).
